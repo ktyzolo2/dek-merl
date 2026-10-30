@@ -1,58 +1,37 @@
-import http.server
-import socketserver
-import os
+import boto3
+from botocore.config import Config
 
-# Render កំណត់ Port ដោយស្វ័យប្រវត្តិ ដូច្នេះយើងត្រូវប្រើ os.environ.get("PORT", 8000)
-PORT = int(os.environ.get("PORT", 8000))
-DIRECTORY = "uploads"
+# កំណត់ព័ត៌មានសម្ងាត់ដែលទទួលបានពី Cloudflare R2
+ACCESS_KEY_ID = "4b53b9d48ac396214d95fea2e44e22de"
+SECRET_ACCESS_KEY = "b91dee244ef9cdd3f26bda734c3dda8696370828a0495c87103961f2f5ef620f"
+ENDPOINT_URL = "https://76131f15fc5b7b2ede75a5b0edd8fa5f.r2.cloudflarestorage.com"
+BUCKET_NAME = "my-videos"
 
-if not os.path.exists(DIRECTORY):
-    os.makedirs(DIRECTORY)
+# ភ្ជាប់ទៅកាន់ R2 តាមរយៈ S3 API (ប្រើប្រាស់ Signature Version 4)
+session = boto3.session.Session()
+client = session.client(
+    's3',
+    endpoint_url=ENDPOINT_URL,
+    aws_access_key_id=ACCESS_KEY_ID,
+    aws_secret_access_key=SECRET_ACCESS_KEY,
+    config=Config(signature_version='s3v4'),
+    region_name='auto'  # Cloudflare R2 ប្រើតំបន់ auto
+)
 
-class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DIRECTORY, **kwargs)
+# ផ្លូវទៅកាន់ហ្វាលវីដេអូរបស់អ្នក (ឧទាហរណ៍: movie.mp4)
+file_path = "movie.mp4"
+object_name = "movie.mp4"
 
-    def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'X-File-Name, Content-Type')
-        super().end_headers()
+print("กำลัง Upload វីដេអូរបស់អ្នកចូលទៅកាន់ Cloudflare R2 (អាចចំណាយពេលបន្តិចតាមទំហំហ្វាល)...")
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.end_headers()
+try:
+    # ប្រើប្រាស់ប្រព័ន្ធ Upload បែប Multipart ដោយស្វ័យប្រវត្តសម្រាប់ហ្វាលធំ
+    client.upload_file(file_path, BUCKET_NAME, object_name)
+    print("✅ Upload វីដេអូបានដោយជោគជ័យ!")
+    
+    # បង្ហាញ Direct Link សម្រាប់យកទៅប្រើប្រាស់
+    public_url = f"{ENDPOINT_URL}/{BUCKET_NAME}/{object_name}"
+    print(f"🔗 Direct Link របស់អ្នកគឺ: {public_url}")
 
-    def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        filename = self.headers.get('X-File-Name', 'video.mp4')
-        file_path = os.path.join(DIRECTORY, filename)
-        
-        try:
-            # អាននិងសរសេរទិន្នន័យម្ដង ១មេកាបៃ (1MB) ដើម្បីការពារកុំឱ្យ Server គាំង RAM
-            with open(file_path, 'wb') as f:
-                remaining = content_length
-                chunk_size = 1024 * 1024  # 1MB
-                while remaining > 0:
-                    read_len = min(remaining, chunk_size)
-                    chunk = self.rfile.read(read_len)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    remaining -= len(chunk)
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            
-            # ส่ง URL กลับไป (ពេល Deploy នៅលើ Render វានឹងប្រើ Domain របស់ Render)
-            response = f'{{"status": "success", "filename": "{filename}"}}'
-            self.wfile.write(response.encode())
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
-
-with socketserver.TCPServer(("", PORT), CORSRequestHandler) as httpd:
-    print(f"🚀 Server កំពុងរត់លើ Port {PORT}")
-    httpd.serve_forever()
+except Exception as e:
+    print(f"❌ មានបញ្ហាในการ Upload: {e}")
